@@ -33,6 +33,15 @@ class Config:
     
     # Other settings
     ALLOWED_EXTENSIONS: Set[str] = {'wav', 'aac', 'm4a', 'mp3'}
+    ALLOWED_MIME_TYPES: Set[str] = {
+        'audio/wav',
+        'audio/wave',
+        'audio/x-wav',
+        'audio/aac',
+        'audio/mp4',
+        'audio/mpeg',
+        'audio/mp3'
+    }
     MAX_FILE_SIZE = 200 * 1024 * 1024  # 200MB
     ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*").split(",")
     DYNAMODB_TABLE = os.getenv('DYNAMODB_TABLE', 'audio-processing-status')
@@ -99,6 +108,10 @@ def allowed_file(filename: str) -> bool:
     """Check if file extension is allowed"""
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in Config.ALLOWED_EXTENSIONS
 
+def allowed_mime_type(content_type: str) -> bool:
+    """Check if MIME type is allowed"""
+    return content_type in Config.ALLOWED_MIME_TYPES
+
 def update_status(upload_id: str, status: ProcessingState, progress: int = 0, error: Optional[str] = None) -> None:
     """Update the processing status in DynamoDB"""
     app.state.table.put_item(Item={
@@ -119,6 +132,18 @@ async def upload_audio(file: UploadFile, background_tasks: BackgroundTasks):
     """
     if not allowed_file(file.filename):
         raise HTTPException(status_code=400, detail="File type not allowed")
+    
+    if not file.content_type or file.content_type.strip() == "":
+        raise HTTPException(
+            status_code=400,
+            detail="File MIME type is required"
+        )
+    
+    if not allowed_mime_type(file.content_type):
+        raise HTTPException(
+            status_code=400,
+            detail=f"File MIME type not allowed. Received: {file.content_type}"
+        )
     
     # check file size
     contents = await file.read()

@@ -7,6 +7,8 @@ import json
 from moto import mock_aws
 import io
 import time
+from fastapi import UploadFile
+from typing import Optional
 
 # Create test client
 client = TestClient(app)
@@ -15,6 +17,16 @@ client = TestClient(app)
 TEST_AUDIO_CONTENT = b"fake audio content"
 TEST_UPLOAD_ID = "test-upload-id"
 TEST_FILENAME = "test.mp3"
+
+class MockUploadFile(UploadFile):
+    """Mock UploadFile that allows setting content_type to None"""
+    def __init__(self, file: io.BytesIO, filename: str, content_type: Optional[str] = None):
+        super().__init__(file=file, filename=filename)
+        self._content_type = content_type
+
+    @property
+    def content_type(self) -> Optional[str]:
+        return self._content_type
 
 @pytest.fixture(autouse=True)
 def aws_credentials():
@@ -69,6 +81,63 @@ def aws_mock(aws_credentials):
             "sqs": sqs,
             "dynamodb": dynamodb
         }
+
+@pytest.mark.parametrize("mime_type,filename,should_pass", [
+    # Valid MIME types with valid extensions
+    ('audio/mpeg', 'test.mp3', True),
+    ('audio/mp3', 'test.mp3', True),
+    ('audio/wav', 'test.wav', True),
+    ('audio/x-wav', 'test.wav', True),
+    ('audio/aac', 'test.aac', True),
+    ('audio/mp4', 'test.m4a', True),
+    
+    # Invalid MIME types with valid extensions (should fail at MIME type check)
+    ('image/jpeg', 'test.mp3', False),
+    ('text/plain', 'test.mp3', False),
+    ('application/pdf', 'test.mp3', False),
+    ('video/mp4', 'test.mp3', False),
+    ('audio/ogg', 'test.mp3', False),  # Not in allowed types
+])
+def test_mime_type_validation(aws_mock, mime_type: str, filename: str, should_pass: bool):
+    """Test MIME type validation for file uploads"""
+    response = client.post(
+        "/upload",
+        files={"file": (filename, TEST_AUDIO_CONTENT, mime_type)}
+    )
+    
+    if should_pass:
+        assert response.status_code == 200
+        assert "upload_id" in response.json()
+    else:
+        assert response.status_code == 400
+        assert "File MIME type not allowed" in response.json()["detail"]
+
+def test_mime_type_with_invalid_extension(aws_mock):
+    """Test MIME type validation when file extension doesn't match content type"""
+    response = client.post(
+        "/upload",
+        files={"file": ("test.txt", TEST_AUDIO_CONTENT, "audio/mpeg")}
+    )
+    
+    # Should fail because extension doesn't match allowed types
+    assert response.status_code == 400
+    assert "File type not allowed" in response.json()["detail"]
+
+def test_mime_type_with_missing_content_type(aws_mock):
+    """Test upload with missing content type"""
+    # Create a file upload with empty content type
+    files = {
+        "file": (
+            "test.mp3",
+            TEST_AUDIO_CONTENT,
+            ""  # Empty content type
+        )
+    }
+    response = client.post("/upload", files=files)
+    
+    # Should fail because content type is required
+    assert response.status_code == 400
+    assert "File MIME type is required" in response.json()["detail"]
 
 def test_upload_endpoint_invalid_file_type(aws_mock):
     """Test upload endpoint with invalid file type."""
