@@ -18,6 +18,7 @@ class ProcessingState(str, Enum):
     PROCESSING = 'processing'
     COMPLETED = 'completed'
     FAILED = 'failed'
+    DOWNLOADING = 'downloading'
 
 class Config:
     """Application configuration"""
@@ -51,22 +52,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# AWS clients
-s3 = boto3.client('s3', endpoint_url=Config.ENDPOINT_URL)
-sqs = boto3.client('sqs', endpoint_url=Config.ENDPOINT_URL)
-dynamodb = boto3.resource('dynamodb', endpoint_url=Config.ENDPOINT_URL)
-table = dynamodb.Table(Config.DYNAMODB_TABLE)
+# Initialize AWS clients
+app.state.s3 = boto3.client('s3', endpoint_url=Config.ENDPOINT_URL)
+app.state.sqs = boto3.client('sqs', endpoint_url=Config.ENDPOINT_URL)
+app.state.dynamodb = boto3.resource('dynamodb', endpoint_url=Config.ENDPOINT_URL)
+app.state.table = app.state.dynamodb.Table(Config.DYNAMODB_TABLE)
 
 def get_queue_url():
     """Get the SQS queue URL, creating the queue if it doesn't exist"""
     try:
         # Try to get the queue URL first
-        response = sqs.get_queue_url(QueueName=Config.QUEUE_NAME)
+        response = app.state.sqs.get_queue_url(QueueName=Config.QUEUE_NAME)
         return response['QueueUrl']
     except ClientError as e:
         if e.response['Error']['Code'] == 'AWS.SimpleQueueService.NonExistentQueue':
             # Queue doesn't exist, create it
-            response = sqs.create_queue(
+            response = app.state.sqs.create_queue(
                 QueueName=Config.QUEUE_NAME,
                 Attributes={
                     'VisibilityTimeout': '300',
@@ -100,7 +101,7 @@ def allowed_file(filename: str) -> bool:
 
 def update_status(upload_id: str, status: ProcessingState, progress: int = 0, error: Optional[str] = None) -> None:
     """Update the processing status in DynamoDB"""
-    table.put_item(Item={
+    app.state.table.put_item(Item={
         'upload_id': upload_id,
         'status': status,
         'progress': progress,
@@ -135,7 +136,7 @@ async def upload_audio(file: UploadFile, background_tasks: BackgroundTasks):
     try:
         update_status(upload_id, ProcessingState.UPLOADING)
         
-        s3.put_object(
+        app.state.s3.put_object(
             Bucket=Config.UPLOAD_BUCKET,
             Key=s3_key,
             Body=contents
@@ -144,7 +145,7 @@ async def upload_audio(file: UploadFile, background_tasks: BackgroundTasks):
         update_status(upload_id, ProcessingState.QUEUED)
         
         queue_url = get_queue_url()
-        sqs.send_message(
+        app.state.sqs.send_message(
             QueueUrl=queue_url,
             MessageBody=json.dumps({
                 'upload_id': upload_id,
@@ -171,7 +172,7 @@ async def get_status(upload_id: str):
     - **upload_id**: The ID of the upload to check
     """
     try:
-        response = table.get_item(Key={'upload_id': upload_id})
+        response = app.state.table.get_item(Key={'upload_id': upload_id})
         
         if 'Item' not in response:
             raise HTTPException(status_code=404, detail="Upload not found")
@@ -216,7 +217,7 @@ async def download(upload_id: str):
     - **upload_id**: File ID to be downloaded
     """
     try:
-        response = table.get_item(Key={'upload_id': upload_id})
+        response = app.state.table.get_item(Key={'upload_id': upload_id})
         
         if 'Item' not in response:
             raise HTTPException(status_code=404, detail="Upload not found")
@@ -230,7 +231,7 @@ async def download(upload_id: str):
 
         processed_key = f"{upload_id}/processed.m4a"
         try:
-            response = s3.get_object(Bucket=Config.PROCESSED_BUCKET, Key=processed_key)
+            response = app.state.s3.get_object(Bucket=Config.PROCESSED_BUCKET, Key=processed_key)
         except Exception as e:
             raise HTTPException(status_code=404, detail="Processed file not found")
 
