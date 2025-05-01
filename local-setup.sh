@@ -12,7 +12,7 @@ fi
 
 # Start Docker Compose services
 echo "Starting Docker Compose services..."
-docker compose up -d
+docker compose up --build -d
 
 # Wait for LocalStack to be ready
 echo "Setting up LocalStack..."
