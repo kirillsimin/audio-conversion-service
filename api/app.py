@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, HTTPException, BackgroundTasks
+from fastapi import FastAPI, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -123,7 +123,7 @@ def update_status(upload_id: str, status: ProcessingState, progress: int = 0, er
     })
 
 @app.post("/upload", response_model=UploadResponse, tags=["Audio"])
-async def upload_audio(file: UploadFile, background_tasks: BackgroundTasks):
+async def upload_audio(file: UploadFile):
     """
     Upload an audio file for processing.
     
